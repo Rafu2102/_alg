@@ -526,8 +526,8 @@ class SnakeGameV10:
             self.screen.blit(value_surf, (panel_x + 140, y))
             y += 24
         
-        # Autopilot status (🔧 V10.15: 門檻 370)
-        if self.current_length >= 370:
+        # Autopilot status (V10.11: 門檻 380)
+        if self.current_length >= 380:
             y += 10
             auto_surf = self.font_medium.render("AUTOPILOT", True, Colors.VICTORY_GOLD)
             self.screen.blit(auto_surf, (panel_x + 20, y))
@@ -760,41 +760,22 @@ class SnakeGameV10:
         # AI step
         old_length = self.current_length
         
-        # 🔥 V10.18 Endgame Autopilot
-        # 只有當蛇對齊 HC 時，才用物理安全檢查（忽略 BFS）
-        # 不對齊時，用 action_masks 保命直到對齊
-        AUTOPILOT_THRESHOLD = 370
+        # 🔥 V10.11 Endgame Autopilot（簡單穩定版）
+        # 原理：370+ 時優先跟隨 HC，如果被 action_masks 禁止就讓 AI 決定
+        AUTOPILOT_THRESHOLD = 380
         action = None
         
         try:
             if self.current_length >= AUTOPILOT_THRESHOLD:
                 env = self.unwrapped_env
                 head = env.snake[0]
-                tail = env.snake[-1]
-                grid = env.grid_array
-                grid_size = env.grid_size
                 hc = env.hc_idx
                 N = env.N
-                direction = env.direction
-                OPPOSITE = {0: 1, 1: 0, 2: 3, 3: 2}
-                MOVES = {0: (-1, 0), 1: (1, 0), 2: (0, -1), 3: (0, 1)}
-                
-                def phys_safe(act_idx):
-                    """只檢查物理安全：不撞牆、不撞身體、不 180"""
-                    if act_idx == OPPOSITE.get(direction):
-                        return False
-                    dr, dc = MOVES[act_idx]
-                    nr, nc = head[0] + dr, head[1] + dc
-                    if not (0 <= nr < grid_size and 0 <= nc < grid_size):
-                        return False
-                    if grid[nr, nc] == 1 and (nr, nc) != tail:
-                        return False
-                    return True
                 
                 # 計算 HC 下一步
-                head_hc = hc[head[0], head[1]]
-                next_hc = (head_hc + 1) % N
-                next_pos = env.path_coords[next_hc]
+                current_hc_idx = hc[head[0], head[1]]
+                next_hc_idx = (current_hc_idx + 1) % N
+                next_pos = env.path_coords[next_hc_idx]
                 
                 dr = next_pos[0] - head[0]
                 dc = next_pos[1] - head[1]
@@ -804,43 +785,13 @@ class SnakeGameV10:
                 elif dc == -1: autopilot_action = 2
                 else: autopilot_action = 3
                 
-                # 🔧 V10.19 新增：如果食物就在旁邊，直接吃！
-                # 解決「食物在角落但 HC 要繞一大圈」的死循環問題
-                food = env.food
-                food_action = None
-                if food:
-                    for act_idx in range(4):
-                        dr, dc = MOVES[act_idx]
-                        nr, nc = head[0] + dr, head[1] + dc
-                        if (nr, nc) == food and phys_safe(act_idx):
-                            food_action = act_idx
-                            break
+                # 用 action_masks 檢查是否安全
+                action_masks = self.env.env_method("action_masks")[0]
                 
-                if food_action is not None:
-                    # 🍎 食物就在旁邊，直接吃
-                    action = [food_action]
-                elif self._is_hc_aligned():
-                    # ✅ 對齊 HC，可以放心走 HC（忽略 BFS）
-                    if phys_safe(autopilot_action):
-                        action = [autopilot_action]
-                    else:
-                        # HC 被身體擋，用物理安全 fallback
-                        for act_idx in range(4):
-                            if phys_safe(act_idx):
-                                action = [act_idx]
-                                break
-                else:
-                    # ❌ 不對齊，用 action_masks 保命
-                    action_masks = self.env.env_method("action_masks")[0]
-                    
-                    # 優先走 HC 方向（如果允許）
-                    if action_masks[autopilot_action]:
-                        action = [autopilot_action]
-                    else:
-                        # fallback：選 flood 最大
-                        fallback = self._get_flood_fallback_action(action_masks)
-                        if fallback is not None:
-                            action = [fallback]
+                if action_masks[autopilot_action]:
+                    # HC 路徑安全，跟隨
+                    action = [autopilot_action]
+                # 否則讓 AI 決定（不做複雜 fallback）
                         
         except Exception as e:
             print(f"❌ Autopilot error: {e}")
